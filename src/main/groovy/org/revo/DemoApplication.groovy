@@ -1,22 +1,16 @@
 package org.revo
 
-import com.paypal.api.payments.Amount
-import com.paypal.api.payments.Details
-import com.paypal.api.payments.Item
-import com.paypal.api.payments.ItemList
-import com.paypal.api.payments.Payer
-import com.paypal.api.payments.Payment
-import com.paypal.api.payments.PaymentExecution
-import com.paypal.api.payments.RedirectUrls
-import com.paypal.api.payments.Transaction
+import com.paypal.api.payments.*
 import com.paypal.base.rest.APIContext
+import org.revo.autoconfigure.InMemoryPaypalPaymentStorge
+import org.revo.autoconfigure.PaypalPaymentStorge
+import org.revo.autoconfigure.PaypalUser
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
-import org.springframework.stereotype.Controller
+import org.springframework.context.annotation.Bean
+import org.springframework.core.env.Environment
 import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestParam
-import org.springframework.web.bind.annotation.ResponseBody
 import org.springframework.web.bind.annotation.RestController
 
 import javax.servlet.http.HttpServletRequest
@@ -27,14 +21,21 @@ class DemoApplication {
     static void main(String[] args) {
         SpringApplication.run DemoApplication, args
     }
+
+    @Bean
+    PaypalPaymentStorge storge() {
+        new InMemoryPaypalPaymentStorge();
+    }
+
 }
 
-@Controller
+@RestController
 class app {
     @Autowired
     APIContext apiContext
+    @Autowired
+    PaypalPaymentStorge storge
 
-    @ResponseBody
     @RequestMapping
     def index(HttpServletRequest request) {
         Details details = new Details();
@@ -63,30 +64,35 @@ class app {
         payment.setIntent("sale");
         payment.setPayer(payer);
         payment.setTransactions(transactions);
-        RedirectUrls redirectUrls = new RedirectUrls();
-        String guid = UUID.randomUUID().toString().replaceAll("-", "");
-        String ss = request.scheme + "://" + request.serverName + ":" + request.serverPort + request.contextPath
-        redirectUrls.setCancelUrl(ss + "/fail?payerId=" + guid);
-        redirectUrls.setReturnUrl(ss + "/success?payerId=" + guid);
-        payment.setRedirectUrls(redirectUrls);
+        String uuid = UUID.randomUUID().toString().replaceAll("-", "");
+        payment.setRedirectUrls(GETRedirectUrls(request, uuid));
         Payment create = payment.create(apiContext);
-        print(create)
+        storge.save(uuid, create)
         create
     }
 
     @RequestMapping("fail")
-    def fail(@RequestParam String guid) {
-        guid
+    def fail(PaypalUser paypalUser) {
+        paypalUser
     }
 
     @RequestMapping("success")
-    @ResponseBody
     def success(PaypalUser paypalUser, HttpServletRequest request) {
-        println(paypalUser)
         Payment payment = new Payment();
         payment.setId(paypalUser.paymentId);
         PaymentExecution paymentExecution = new PaymentExecution();
-        paymentExecution.setPayerId(paypalUser.PayerID);
+        paymentExecution.setPayerId(paypalUser.payerID);
+        payment = Payment.get(apiContext.accessToken, paypalUser.paymentId);
         payment.execute(apiContext.accessToken, paymentExecution);
+    }
+    @Autowired
+    Environment env
+
+    RedirectUrls GETRedirectUrls(HttpServletRequest request, String uuid) {
+        RedirectUrls redirectUrls = new RedirectUrls();
+        String ss = request.scheme + "://" + request.serverName + ":" + request.serverPort + request.contextPath
+        redirectUrls.setCancelUrl(ss + env.getProperty("paypal.failUrl") + "?uuid=" + uuid);
+        redirectUrls.setReturnUrl(ss + env.getProperty("paypal.successUrl") + "?uuid=" + uuid);
+        redirectUrls
     }
 }
